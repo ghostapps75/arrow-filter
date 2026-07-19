@@ -1,6 +1,33 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "drive", 1 }, "Drive",
+        juce::NormalisableRange<float> (1.0f, 10.0f, 0.1f), 1.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "color", 1 }, "Color",
+        juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 20000.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "motion", 1 }, "Motion",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "lfoRate", 1 }, "LFO Rate",
+        juce::NormalisableRange<float> (0.1f, 20.0f, 0.01f, 0.5f), 1.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "resonance", 1 }, "Resonance",
+        juce::NormalisableRange<float> (0.1f, 10.0f, 0.01f, 0.3f), 0.707f));
+
+    return { params.begin(), params.end() };
+}
+
 //==============================================================================
 PluginProcessor::PluginProcessor()
      : AudioProcessor (BusesProperties()
@@ -10,8 +37,21 @@ PluginProcessor::PluginProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ),
+       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
+    driveParam = apvts.getRawParameterValue ("drive");
+    colorParam = apvts.getRawParameterValue ("color");
+    motionParam = apvts.getRawParameterValue ("motion");
+    lfoRateParam = apvts.getRawParameterValue ("lfoRate");
+    resonanceParam = apvts.getRawParameterValue ("resonance");
+
+    waveShaper.functionToUse = [] (float x)
+    {
+        return std::tanh (x);
+    };
+
+    lfo.initialise ([] (float x) { return std::sin (x); });
 }
 
 PluginProcessor::~PluginProcessor()
@@ -86,9 +126,19 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = (juce::uint32)samplesPerBlock;
+    spec.numChannels = (juce::uint32)getTotalNumOutputChannels();
+
+    waveShaper.prepare (spec);
+    lfo.prepare (spec);
+
+    for (auto& filter : filters)
+    {
+        filter.prepare (spec);
+        filter.setType (juce::dsp::StateVariableTPTFilterType::lowpass);
+    }
 }
 
 void PluginProcessor::releaseResources()
@@ -128,26 +178,46 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    float drive = driveParam->load (std::memory_order_relaxed);
+    float color = colorParam->load (std::memory_order_relaxed);
+    float motion = motionParam->load (std::memory_order_relaxed);
+    float lfoRateVal = lfoRateParam->load (std::memory_order_relaxed);
+    float resVal = resonanceParam->load (std::memory_order_relaxed);
+    
+    lfo.setFrequency (lfoRateVal);
+
+    for (auto& filter : filters)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        filter.setResonance (resVal);
+    }
+
+    juce::dsp::AudioBlock<float> block (buffer);
+    juce::dsp::ProcessContextReplacing<float> context (block);
+
+    // Block-level drive/waveshaper
+    buffer.applyGain (drive);
+    waveShaper.process (context);
+    buffer.applyGain (1.0f / drive); // Compensation
+
+    // Sample-by-sample filter modulation
+    int numChannels = juce::jmin (buffer.getNumChannels(), (int)filters.size());
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        float lfoVal = lfo.processSample (0.0f); // Outputs -1.0 to 1.0
+        // Exponential mapping: +/- 4 octaves max based on motion depth
+        float modulatedCutoff = color * std::pow (2.0f, lfoVal * motion * 4.0f);
+        modulatedCutoff = juce::jlimit (20.0f, 20000.0f, modulatedCutoff);
+
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            filters[ch].setCutoffFrequency (modulatedCutoff);
+            float input = buffer.getSample (ch, sample);
+            float output = filters[ch].processSample (0, input);
+            buffer.setSample (ch, sample, output);
+        }
     }
 }
 
@@ -165,17 +235,17 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 
 //==============================================================================

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
 
 #if (MSVC)
 #include "ipps.h"
@@ -11,6 +12,8 @@ class PluginProcessor : public juce::AudioProcessor
 public:
     PluginProcessor();
     ~PluginProcessor() override;
+
+    juce::AudioProcessorValueTreeState apvts;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -39,5 +42,17 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
 private:
+    juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filters;
+    juce::dsp::WaveShaper<float> waveShaper;
+    juce::dsp::Oscillator<float> lfo;
+
+    std::atomic<float>* driveParam = nullptr;
+    std::atomic<float>* colorParam = nullptr;
+    std::atomic<float>* motionParam = nullptr;
+    std::atomic<float>* lfoRateParam = nullptr;
+    std::atomic<float>* resonanceParam = nullptr;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
