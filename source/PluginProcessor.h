@@ -15,6 +15,9 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // Read-only from the UI thread (written by audio thread, polled at ~30 Hz by LfoLight)
+    std::atomic<float> lfoOutput { 0.0f };
+
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
@@ -44,15 +47,23 @@ public:
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    // DSP chain
     std::array<juce::dsp::StateVariableTPTFilter<float>, 2> filters;
-    juce::dsp::WaveShaper<float> waveShaper;
-    juce::dsp::Oscillator<float> lfo;
+    juce::dsp::WaveShaper<float>                            waveShaper;
+    juce::dsp::Oscillator<float>                            lfo;
+    juce::dsp::DryWetMixer<float>                           dryWetMixer;
 
-    std::atomic<float>* driveParam = nullptr;
-    std::atomic<float>* colorParam = nullptr;
-    std::atomic<float>* motionParam = nullptr;
-    std::atomic<float>* lfoRateParam = nullptr;
+    // Presence high shelf — one IIR filter per channel
+    std::array<juce::IIRFilter, 2>                           presenceFilters;
+
+    // Parameter pointers (audio-thread atomic reads)
+    std::atomic<float>* driveParam     = nullptr;
+    std::atomic<float>* colorParam     = nullptr;
+    std::atomic<float>* motionParam    = nullptr;
+    std::atomic<float>* lfoRateParam   = nullptr;
     std::atomic<float>* resonanceParam = nullptr;
+    std::atomic<float>* mixParam       = nullptr;
+    std::atomic<float>* presenceParam  = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

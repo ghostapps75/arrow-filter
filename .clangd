@@ -1,0 +1,38 @@
+# .clangd — tells the Clang language server where to find JUCE headers
+# This has no effect on the actual CMake/MSBuild compilation; it only
+# fixes "file not found" false positives in IDE IntelliSense.
+
+CompileFlags:
+  Add:
+    # JUCE module root — resolves <juce_audio_processors/...> style includes
+    - "-IC:/AI Agent Folder/ArrowFilter/JUCE/modules"
+    # CMake build root — resolves generated BinaryData.h and JuceHeader.h
+    - "-IC:/AI Agent Folder/ArrowFilter/build"
+    - "-IC:/AI Agent Folder/ArrowFilter/build/ArrowFilter_artefacts/Debug"
+    # CLAP / melatonin modules
+    - "-IC:/AI Agent Folder/ArrowFilter/modules"
+    - "-IC:/AI Agent Folder/ArrowFilter/modules/melatonin_inspector"
+    # Source directory itself
+    - "-IC:/AI Agent Folder/ArrowFilter/source"
+    # Minimum defines for JUCE to parse correctly without the CMake-generated config
+    - "-DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1"
+    - "-DJUCE_STANDALONE_APPLICATION=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_audio_basics=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_audio_devices=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_audio_formats=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_audio_processors=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_audio_utils=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_core=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_data_structures=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_dsp=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_events=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_graphics=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_gui_basics=1"
+    - "-DJUCE_MODULE_AVAILABLE_juce_gui_extra=1"
+    - "-std=c++17"
+    - "-DWIN32"
+    - "-D_WINDOWS"
+
+  # Silence warnings about MSVC-specific pragmas when clangd parses on Windows
+  Remove:
+    - "-W4"

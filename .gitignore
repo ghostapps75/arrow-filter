@@ -28,3 +28,8 @@ cmake-build-debug
 cmake-build-release
 cmake-build-relwithdebinfo
 packaging/Output/*
+
+# Build artifacts - never track these
+build/
+build_ninja/
+temp_repo/
